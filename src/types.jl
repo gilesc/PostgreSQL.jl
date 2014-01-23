@@ -29,6 +29,8 @@ end
 @pgtype PostgresVarChar 1043
 @pgtype PostgresUnknown 705
 
+@pgtype PostgresFloat64Array 1022
+
 function jldata(ptr::Ptr{Uint8}, ::Type{PostgresBool}, length)
     pointer_to_array(convert(Ptr{Bool}, ptr), 0)[1]
 end
@@ -60,6 +62,29 @@ end
 
 function jldata(ptr::Ptr{Uint8}, ::Type{PostgresVarChar}, length)
     bytestring(ptr)
+end
+
+# FIXME: this may vary from server to server
+MAXALIGN = 8
+
+function jldata (ptr::Ptr{Uint8}, ::Type{PostgresFloat64Array}, length)
+    # See: utils/array.h in postgresql distribution
+    # for description of varlen array structure
+
+    # FIXME: handle null mask
+    header = map(ntoh,pointer_to_array(convert(Ptr{Int32}, ptr), (20,)))
+    ndim, offset, oid = header[1:3]
+    dims = tuple(map(int, header[4:(3+ndim)])...) 
+    if offset == 0
+        offset = ( 3 + ndim * 2 ) * 4
+        offset = int(ceil(offset / MAXALIGN) * MAXALIGN)
+    end
+    data = zeros(Float64, prod(dims))
+    for i = 1:prod(dims)
+        data[i] = jldata(ptr + offset + (i - 1) * 12, PostgresFloat64, 1)
+    end
+    # FIXME: make sure this reshapes in row-major order
+    reshape(data, dims)
 end
 
 function jldata(ptr::Ptr{Uint8}, ::Type{PostgresUnknown}, length)
